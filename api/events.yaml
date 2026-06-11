@@ -1,0 +1,38 @@
+# Event contract — owned by THIS repo. Topic catalog: bian-platform/platform-infra/kafka/topics.yaml
+service: sd-savings-account
+publishes:
+  - topic: bian.accounts.savings-account
+    events:
+      - type: account.opened
+        payload: [accountId, currency, interestRateBp, status]
+      - type: account.blocked
+        payload: [accountId]
+      - type: account.active
+        payload: [accountId]
+      - type: account.closed
+        payload: [accountId]
+      - type: transaction.posted    # PRIMARY FRAUD FEED (flagship flow)
+        payload: [transactionId, accountId, type, amountMinor, balanceAfterMinor, currency]
+      - type: interest.accrued
+        payload: [accountId, accruedMinor, totalAccruedMinor]
+      - type: interest.capitalized
+        payload: [accountId, amountMinor, balanceAfterMinor]
+  - topic: bian.kyc.check
+    events:
+      - type: kyc.check.requested   # FLAGSHIP KYC FLOW
+        payload: [accountId, customerReference]
+      - type: kyc.assessment.auto-approved
+        payload: [accountId, note]
+      - type: kyc.assessment.approved
+        payload: [accountId, reason]
+      - type: kyc.assessment.rejected
+        payload: [accountId, reason]
+consumes:
+  - topic: bian.cheques.lifecycle
+    events:
+      - type: cheque.cleared        # → POST .../payments/cheque-credit
+        from: sd-cheque-processing
+  - topic: bian.kyc.assessment
+    events:
+      - type: kyc.assessment.completed
+        from: sd-know-your-customer

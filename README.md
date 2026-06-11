@@ -1,55 +1,44 @@
 # Savings Account
 
-BIAN Service Domain microservice — part of the [bian-platform](../../bian-platform/) landscape.
+BIAN Service Domain microservice — **Phase 2a DEEP build** (graduated from the golden template; see `.bian-graduated`).
 
 | | |
 |---|---|
 | **Business Area** | Operations and Execution |
 | **Business Domain** | Account Management |
 | **Functional Pattern** | Fulfill |
-| **Asset Type** | Savings Account Facility |
 | **Control Record** | Savings Account Facility Fulfillment Arrangement |
 | **K8s Namespace** | `bian-operations` |
-| **Stack** | Java 21 · Spring Boot 3 · Resilience4j · Cilium mesh |
 
-> ⚠️ **Phase 1 (shallow):** real REST API over an in-memory store. Phase 2 replaces the store with per-domain persistence and real domain logic. This repo was stamped from `bian-platform/generator` — regenerate rather than hand-editing boilerplate.
+## Business rules implemented
 
-## BIAN Semantic API
+- **No overdraft, ever** — withdrawals may not take the balance below `minBalanceMinor` (enforced in code *and* by a DB CHECK once hydrated).
+- **Monthly withdrawal cap** — `bian.savings.monthly-withdrawal-cap` (default 6, the classic savings rule); the cap counts WITHDRAWAL postings per UTC calendar month. Deposits are never capped.
+- **Interest** — simple daily accrual at `interestRateBp` (basis points p.a.), floor arithmetic: `balance × bp / 10 000 / 365` minor units/day. `accrue` builds up `accruedInterestMinor`; `capitalize` moves it into the balance as an INTEREST posting. (A scheduler drives daily accrual in Phase 2b; the endpoint is the mechanism.)
+- **KYC gating** — same semantics as Current Account (`PENDING_KYC` → no transactions; auto-approve flag for Phase 2a).
+- **Closing** — requires balance **and accrued interest** both zero: capitalize first.
+- Money: `long` minor units; rates: basis points. No floats.
 
-| Method | Path | BIAN action term |
-|---|---|---|
-| GET | `/v1/service-domain` | — (SD metadata) |
-| POST | `/v1/savings-account-facility-fulfillment-arrangement/initiate` | Initiate |
-| GET | `/v1/savings-account-facility-fulfillment-arrangement` | Retrieve (list) |
-| GET | `/v1/savings-account-facility-fulfillment-arrangement/{crId}/retrieve` | Retrieve |
-| PUT | `/v1/savings-account-facility-fulfillment-arrangement/{crId}/update` | Update |
-| PUT | `/v1/savings-account-facility-fulfillment-arrangement/{crId}/control` | Control — body `{"action": "suspend"\|"resume"\|"terminate"}` |
+## API & contracts (owned by this repo)
 
-OpenAPI UI: `/swagger-ui.html` · Health: `/actuator/health` · Metrics: `/actuator/prometheus`
-
-**API contract:** [`api/openapi.yaml`](api/openapi.yaml) — owned by **this repo** (contract-per-repo; no central contracts repo). The runtime spec at `/v3/api-docs` must stay compatible with it; Phase 2 adds contract tests that enforce this.
-
-## Run locally
+- REST: [`api/openapi.yaml`](api/openapi.yaml) · Events: [`api/events.yaml`](api/events.yaml)
+- Base: `/v1/savings-account-facility-fulfillment-arrangement`
+- Payments BQ: `deposit` / `withdraw` / `cheque-credit` / history · Interest BQ: `accrue` / `capitalize` · `balance` shows accrued interest + withdrawals used this month
 
 ```bash
 mvn spring-boot:run
-curl localhost:8080/v1/service-domain
-
-# lifecycle smoke test
-curl -X POST localhost:8080/v1/savings-account-facility-fulfillment-arrangement/initiate -H 'content-type: application/json' -d '{"note":"hello"}'
+CR=/v1/savings-account-facility-fulfillment-arrangement
+ID=$(curl -s -X POST localhost:8080$CR/initiate -H 'content-type: application/json' \
+     -d '{"customerReference":"C-1","interestRateBp":100}' | jq -r .accountId)
+curl -s -X POST localhost:8080$CR/$ID/payments/deposit -H 'content-type: application/json' -d '{"amountMinor":365000}'
+curl -s -X POST localhost:8080$CR/$ID/interest/accrue
+curl -s -X POST localhost:8080$CR/$ID/interest/capitalize
 ```
 
-## Build & containerize
+## Persistence
 
-```bash
-mvn -B verify
-docker build -t bian/sd-savings-account:0.1.0 .
-```
+In-memory port/adapter. **Postgres ready to hydrate, not wired**: [`db/schema.sql`](db/schema.sql) + `db/seed.sql`, provisioned by `bian-platform/platform-infra/postgres/hydrate.sh` on explicit go-ahead. The no-overdraft invariant is a `CHECK (balance_minor >= 0)` at the DB layer too.
 
-## Deploy (Helm → K8s with Cilium mesh)
+## Tests
 
-```bash
-helm upgrade --install sd-savings-account ./helm -n bian-operations
-```
-
-Exposed through the platform Gateway at path prefix `/sd-savings-account` (Cilium Gateway API). Mesh policy (`CiliumNetworkPolicy`) allows: gateway ingress, same-area peers, Prometheus — everything else denied.
+`mvn verify` — interest floor-arithmetic, monthly cap (incl. month rollover via injected Clock), min-balance floor, close-requires-capitalize, plus a boot/API journey.
