@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: sd-savings-account
+
+server:
+  port: 8080
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true   # /actuator/health/liveness + /readiness for K8s probes
+  info:
+    env:
+      enabled: true
+
+info:
+  bian:
+    serviceDomain: "Savings Account"
+    businessArea: "Operations and Execution"
+    businessDomain: "Account Management"
+    functionalPattern: "Fulfill"
+    assetType: "Savings Account Facility"
+    controlRecord: "Savings Account Facility Fulfillment Arrangement"
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      serviceDomain:
+        slidingWindowSize: 20
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
