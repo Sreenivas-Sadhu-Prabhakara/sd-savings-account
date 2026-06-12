@@ -44,6 +44,28 @@ class SavingsAccountServiceTest {
     }
 
     @Nested
+    class KycLoopClosure {
+        @Test
+        void activeGatewayDispatchesAndIgnoresAutoApprove() {
+            var dispatched = new java.util.ArrayList<String>();
+            KycGateway gateway = new KycGateway() {
+                @Override public boolean isActive() { return true; }
+                @Override public boolean requestCheck(String accountId, String customerReference) {
+                    dispatched.add(accountId);
+                    return true;
+                }
+            };
+            var svc = new SavingsAccountService(new InMemoryAccountRepository(), events,
+                    gateway, true, 6, clock);
+            SavingsAccount a = svc.open("C-LOOP-SA", "INR", 100, 0);
+            assertThat(a.getStatus()).isEqualTo(SavingsAccount.Status.PENDING_KYC);
+            assertThat(dispatched).containsExactly(a.getAccountId());
+            svc.applyKycResult(a.getAccountId(), true, "CLEAN");
+            assertThat(svc.retrieve(a.getAccountId()).getStatus()).isEqualTo(SavingsAccount.Status.ACTIVE);
+        }
+    }
+
+    @Nested
     class NoOverdraft {
         @Test
         void withdrawalBelowMinBalanceRejected() {

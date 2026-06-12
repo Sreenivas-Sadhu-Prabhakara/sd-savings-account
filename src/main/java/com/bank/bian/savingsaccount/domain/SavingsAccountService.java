@@ -44,6 +44,7 @@ public class SavingsAccountService {
     private final AccountRepository repository;
     private final EventPublisher events;
     private final boolean kycAutoApprove;
+    private final KycGateway kycGateway;
     private final int monthlyWithdrawalCap;
     private final Clock clock;
     private final Map<String, ReentrantLock> locks = new ConcurrentHashMap<>();
@@ -51,15 +52,23 @@ public class SavingsAccountService {
     @Autowired
     public SavingsAccountService(AccountRepository repository,
                                  EventPublisher events,
+                                 KycGateway kycGateway,
                                  @Value("${bian.kyc.auto-approve:true}") boolean kycAutoApprove,
                                  @Value("${bian.savings.monthly-withdrawal-cap:6}") int monthlyWithdrawalCap) {
-        this(repository, events, kycAutoApprove, monthlyWithdrawalCap, Clock.systemUTC());
+        this(repository, events, kycGateway, kycAutoApprove, monthlyWithdrawalCap, Clock.systemUTC());
     }
 
     public SavingsAccountService(AccountRepository repository, EventPublisher events,
                                  boolean kycAutoApprove, int monthlyWithdrawalCap, Clock clock) {
+        this(repository, events, KycGateway.NONE, kycAutoApprove, monthlyWithdrawalCap, clock);
+    }
+
+    public SavingsAccountService(AccountRepository repository, EventPublisher events,
+                                 KycGateway kycGateway, boolean kycAutoApprove,
+                                 int monthlyWithdrawalCap, Clock clock) {
         this.repository = repository;
         this.events = events;
+        this.kycGateway = kycGateway;
         this.kycAutoApprove = kycAutoApprove;
         this.monthlyWithdrawalCap = monthlyWithdrawalCap;
         this.clock = clock;
@@ -88,7 +97,13 @@ public class SavingsAccountService {
 
         events.publish(DomainEvent.of(TOPIC_KYC, "kyc.check.requested", Map.of(
                 "accountId", account.getAccountId(), "customerReference", customerReference)));
-        if (kycAutoApprove) {
+        if (kycGateway.isActive()) {
+            // 2d-ii: real KYC wired — dispatch and stay PENDING_KYC for the callback.
+            boolean delivered = kycGateway.requestCheck(account.getAccountId(), customerReference);
+            events.publish(DomainEvent.of(TOPIC_KYC,
+                    delivered ? "kyc.check.dispatched" : "kyc.check.dispatch-failed",
+                    Map.of("accountId", account.getAccountId())));
+        } else if (kycAutoApprove) {
             account.setStatus(SavingsAccount.Status.ACTIVE);
             account.setUpdatedAt(clock.instant());
             repository.save(account);
